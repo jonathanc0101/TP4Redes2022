@@ -39,11 +39,38 @@
 
 // Descriptor de archivo del socket.
 static int fd;
+static int source_fd;
+
+void miPerror(char nombre[], int valor)
+{
+    if (valor < 0)
+    {
+        perror(nombre);
+    }
+}
+
+void handleConnection(int source_fd, struct sockaddr_in src_addr, int num_hijo)
+{
+    char buf[BUFSIZE];
+
+    for (;;)
+    {
+        memset(&buf, 0, sizeof(buf));
+
+        // Recibe un mensaje entrante.
+        miPerror("read", read(source_fd, buf, sizeof(buf)));
+
+        // Imprime dirección del emisor y mensaje recibido.
+        printf("[Hijo:%d] [%s:%d] %s\n", num_hijo, inet_ntoa(src_addr.sin_addr), ntohs(src_addr.sin_port), buf);
+    }
+
+    close(source_fd);
+    exit(EXIT_SUCCESS);
+}
 
 // Cierra el socket al recibir una señal SIGTERM.
 void handler(int signal)
 {
-    close(fd);
     exit(EXIT_SUCCESS);
 }
 
@@ -56,11 +83,7 @@ int main(int argc, char *argv[])
 
     // Crea el socket.
     fd = socket(AF_INET, SOCK_STREAM, 0);
-    if (fd == -1)
-    {
-        perror("socket");
-        exit(EXIT_FAILURE);
-    }
+    miPerror("socket", fd);
 
     // Estructura con la dirección donde escuchará el servidor.
     memset(&addr, 0, sizeof(struct sockaddr_in));
@@ -79,55 +102,38 @@ int main(int argc, char *argv[])
     // Permite reutilizar la dirección que se asociará al socket.
     int optval = 1;
     int optname = SO_REUSEADDR | SO_REUSEPORT;
-    if (setsockopt(fd, SOL_SOCKET, optname, &optval, sizeof(optval)) == -1)
-    {
-        perror("setsockopt");
-        exit(EXIT_FAILURE);
-    }
+
+    int sockopt_res = setsockopt(fd, SOL_SOCKET, optname, &optval, sizeof(optval));
+    miPerror("setsockopt", sockopt_res);
 
     // Asocia el socket con la dirección indicada. Tradicionalmente esta
     // operación se conoce como "asignar un nombre al socket".
-    int b = bind(fd, (struct sockaddr *)&addr, sizeof(addr));
-    if (b == -1)
-    {
-        perror("bind");
-        exit(EXIT_FAILURE);
-    }
+    int b_res = bind(fd, (struct sockaddr *)&addr, sizeof(addr));
+    miPerror("bind", b_res);
 
-    if (listen(fd, 2) == -1)
-    {
-        perror("listen");
-        exit(EXIT_FAILURE);
-    }
+    int l_res = listen(fd, 2);
+    miPerror("listen", l_res);
 
     printf("Escuchando en %s:%d ...\n", inet_ntoa(addr.sin_addr), ntohs(addr.sin_port));
 
     struct sockaddr_in src_addr;
     socklen_t src_addr_len;
 
-    // nos bloqueamos hasta que llegue una conexion
-    int source_fd = accept(fd, (struct sockaddr *)&src_addr, &src_addr_len);
-    if (source_fd < 0)
-    {
-        perror("accept");
-        exit(EXIT_FAILURE);
-    }
-
-    char buf[BUFSIZE];
-
+    int hijos_count = 0;
     for (;;)
     {
-        memset(&buf, 0, sizeof(buf));
+        // nos bloqueamos hasta que llegue una conexion
+        source_fd = accept(fd, (struct sockaddr *)&src_addr, &src_addr_len);
+        miPerror("accept", source_fd);
 
-        // Recibe un mensaje entrante.
-        if (read(source_fd, buf, sizeof(buf)) == -1)
-        {
-            perror("read");
-            exit(EXIT_FAILURE);
+        if (fork() == 0)
+        { // hijo
+            handleConnection(source_fd, src_addr, hijos_count);
         }
-
-        // Imprime dirección del emisor y mensaje recibido.
-        printf("[%s:%d] %s\n", inet_ntoa(src_addr.sin_addr), ntohs(src_addr.sin_port), buf);
+        else
+        {
+            hijos_count++;
+        }
     }
 
     // Cierra el socket.
